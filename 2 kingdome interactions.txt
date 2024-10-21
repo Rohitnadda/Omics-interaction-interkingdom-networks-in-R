@@ -1,0 +1,43 @@
+library(igraph)
+install.packages("reshape2")
+library(reshape2)
+
+file_path<-file.choose()
+data <- read_excel(file_path, sheet = 2)
+data_matrix <- as.matrix(data[,-1])
+rownames(data_matrix) <- data[[1]] 
+colnames(data_matrix) <- colnames(data)[-1]  # Exclude the first column from column names
+
+# Check the structure of the new data matrix
+str(data_matrix)
+cor_df <- melt(data_matrix)
+cor_df$Var1 <- as.character(cor_df$Var1)
+cor_df$Var2 <- as.character(cor_df$Var2)
+
+# Remove self-loops (correlations of a species with itself)
+cor_df <- cor_df[cor_df$Var1 != cor_df$Var2,]
+
+# Remove duplicate edges (if Var1 and Var2 have already been seen in the opposite direction)
+cor_df <- cor_df[!duplicated(t(apply(cor_df, 1, sort))),]
+cor_df <- cor_df[cor_df$value != 0, ]
+
+# Create a graph from the data frame
+g <- graph_from_data_frame(cor_df, directed = FALSE)
+
+E(g)$weight <- cor_df$value
+
+# Set vertex shapes and colors based on whether they are row or column names
+V(g)$shape <- ifelse(V(g)$name %in% rownames(data_matrix), "circle", "circle")
+V(g)$color <- ifelse(V(g)$name %in% rownames(data_matrix), rgb(1, 1, 0, alpha = 0.5), rgb(0, 0.5, 0, alpha = 0.5))
+
+# Set vertex size based on the degree
+V(g)$size <- ifelse(V(g)$name %in% rownames(data_matrix), degree(g) * 1, degree(g) * 1.2)
+
+g <- delete_edges(g, E(g)[E(g)$weight == 0])
+# Set edge color and width
+E(g)$color <- ifelse(E(g)$weight > 0, rgb(1, 0, 0, alpha = 0.5), rgb(0, 0, 1, alpha = 0.5))
+#E(g)$color <- ifelse(E(g)$weight > 0, "blue", "red")
+E(g)$width <- abs(E(g)$weight) * 90  # Increased line weight
+
+# Plot with layout
+plot(g, layout = layout_with_graphopt, vertex.label.color = "black", vertex.label.family = "Helvetica", vertex.label.font = 2, vertex.label.cex = 3)
