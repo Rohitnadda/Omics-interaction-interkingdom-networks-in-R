@@ -1,0 +1,125 @@
+# Load necessary libraries
+library(readxl)
+library(igraph)
+library(reshape2)
+install.packages("circlize")
+library(circlize)
+
+# Load all three datasets
+file_path_human_bacteria <- file.choose()  # Select dataset 1: human and bacteria
+file_path_human_fungus <- file.choose()    # Select dataset 2: human and fungus
+file_path_fungus_bacteria <- file.choose() # Select dataset 3: fungus and bacteria
+
+# Read the datasets (assuming the same structure across sheets)
+data_human_bacteria <- read_excel(file_path_human_bacteria, sheet = 1)
+data_human_fungus <- read_excel(file_path_human_fungus, sheet = 1)
+data_fungus_bacteria <- read_excel(file_path_fungus_bacteria, sheet = 1)
+
+# Convert to matrices, keeping rownames intact
+data_matrix_human_bacteria <- as.matrix(data_human_bacteria[,-1])
+rownames(data_matrix_human_bacteria) <- data_human_bacteria[[1]]
+colnames(data_matrix_human_bacteria) <- colnames(data_human_bacteria)[-1]
+
+data_matrix_human_fungus <- as.matrix(data_human_fungus[,-1])
+rownames(data_matrix_human_fungus) <- data_human_fungus[[1]]
+colnames(data_matrix_human_fungus) <- colnames(data_human_fungus)[-1]
+
+data_matrix_fungus_bacteria <- as.matrix(data_fungus_bacteria[,-1])
+rownames(data_matrix_fungus_bacteria) <- data_fungus_bacteria[[1]]
+colnames(data_matrix_fungus_bacteria) <- colnames(data_fungus_bacteria)[-1]
+
+# Combine the three datasets
+# First, melt each dataset into long format for easy combination
+cor_df_human_bacteria <- melt(data_matrix_human_bacteria)
+cor_df_human_fungus <- melt(data_matrix_human_fungus)
+cor_df_fungus_bacteria <- melt(data_matrix_fungus_bacteria)
+
+# Combine all into a single data frame
+combined_cor_df <- rbind(cor_df_human_bacteria, cor_df_human_fungus, cor_df_fungus_bacteria)
+
+# Convert Var1 and Var2 to character for manipulation
+combined_cor_df$Var1 <- as.character(combined_cor_df$Var1)
+combined_cor_df$Var2 <- as.character(combined_cor_df$Var2)
+
+# Remove self-loops
+combined_cor_df <- combined_cor_df[combined_cor_df$Var1 != combined_cor_df$Var2,]
+
+# Remove duplicate edges
+combined_cor_df <- combined_cor_df[!duplicated(t(apply(combined_cor_df, 1, sort))),]
+combined_cor_df <- combined_cor_df[combined_cor_df$value != 0, ]
+
+# Create a graph from the combined data frame
+g_combined <- graph_from_data_frame(combined_cor_df, directed = FALSE)
+
+E(g_combined)$weight <- combined_cor_df$value
+communities <- cluster_spinglass(g_combined, weights = E(g_combined)$weight, implementation = "neg")
+V(g_combined)$color <- membership(communities)
+print(g_combined)
+# Set vertex size based on degree
+V(g_combined)$size <- degree(g_combined) * 2
+# Set vertex shapes and colors based on their source (human, fungus, bacteria)
+human_proteins <- unique(data_human_bacteria[[1]])  # Adjust based on which column has human proteins
+fungal_proteins <- unique(data_human_fungus[[1]])  # Similarly for fungus
+bacterial_proteins <- unique(data_fungus_bacteria[[1]])  # Similarly for bacteria
+
+V(g_combined)$color <- ifelse(V(g_combined)$name %in% human_proteins, rgb(1, 0.5, 0, alpha = 0.5),
+                              ifelse(V(g_combined)$name %in% fungal_proteins, rgb(1, 1, 0, alpha = 0.5),
+                                     ifelse(V(g_combined)$name %in% bacterial_proteins, rgb(0, 0.5, 0, alpha = 0.5), rgb(0.5, 0.5, 0.5, alpha = 0.5))))
+
+
+# Set vertex size based on the degree
+V(g_combined)$size <- degree(g_combined) * 1
+
+# Set edge colors and widths based on correlation values
+E(g_combined)$color <- ifelse(E(g_combined)$weight > 0, rgb(1, 0, 0, alpha = 0.5), rgb(0, 0, 1, alpha = 0.5))
+E(g_combined)$width <- abs(E(g_combined)$weight) * 80
+
+# Remove edges with zero weight
+g_combined <- delete_edges(g_combined, E(g_combined)[E(g_combined)$weight == 0])
+
+# Plot the graph with layout
+plot(g_combined, layout = layout_with_graphopt, vertex.label.color = "black", vertex.label.family = "Helvetica", vertex.label.font = 2, vertex.label.cex = 5.5)
+
+
+
+# Prepare Circos plot
+
+circos.clear()
+circos.par(gap.degree = 5)  # Increase gap between sectors
+
+# Define sectors and colors
+sectors <- c("Human", "Fungus", "Bacteria")
+grid_colors <- c("orange", "yellow", "green")
+names(grid_colors) <- sectors  # Name the colors for the sectors
+
+# Assign sectors based on proteins
+combined_cor_df$Sector1 <- ifelse(combined_cor_df$Var1 %in% human_proteins, "Human",
+                                  ifelse(combined_cor_df$Var1 %in% fungal_proteins, "Fungus",
+                                         ifelse(combined_cor_df$Var1 %in% bacterial_proteins, "Bacteria", NA)))
+
+combined_cor_df$Sector2 <- ifelse(combined_cor_df$Var2 %in% human_proteins, "Human",
+                                  ifelse(combined_cor_df$Var2 %in% fungal_proteins, "Fungus",
+                                         ifelse(combined_cor_df$Var2 %in% bacterial_proteins, "Bacteria", NA)))
+# Set edge colors based on correlation values
+combined_cor_df$edge_color <- ifelse(combined_cor_df$value > 0, "red", "blue")  # Red for positive, Blue for negative
+widths <- abs(combined_cor_df$value) * 10
+# Create the chord diagram with named colors
+chordDiagram(
+  combined_cor_df[, c("Var1", "Var2", "value")], 
+  transparency = 0.5, 
+  annotationTrack = "grid", 
+  preAllocateTracks = 1,
+  grid.col = grid_colors,  # Use named vector for grid colors
+  col = ifelse(combined_cor_df$value > 0, "red", "blue")  # Red for positive, Blue for negative
+)
+
+# Add sector labels
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  circos.text(CELL_META$xcenter, CELL_META$ylim[1], 
+              CELL_META$sector.index, 
+              facing = "clockwise", 
+              niceFacing = TRUE, adj = c(0, 0.5))
+}, bg.border = NA)
+
+# Clear Circos settings after finishing
+circos.clear()
